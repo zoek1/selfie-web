@@ -1,0 +1,30 @@
+{
+  "name": "selfie-web",
+  "version": "1.0.0",
+  "description": "Bot to capture the style of the web ",
+  "main": "main.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zoek1/selfie-web.git"
+  },
+  "keywords": [
+    "arweave",
+    "blockchain"
+  ],
+  "author": "Miguel Angel G.",
+  "license": "BSD-2-Clause",
+  "bugs": {
+    "url": "https://github.com/zoek1/selfie-web/issues"
+  },
+  "homepage": "https://github.com/zoek1/selfie-web#readme",
+  "dependencies": {
+    "@hapi/hapi": "^18.4.0",
+    "arweave": "^1.5.3",
+    "puppeteer": "^2.0.0",
+    "url-parse": "^1.4.7",
+    "yargs": "^14.2.0"
+  }
+}
