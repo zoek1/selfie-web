@@ -3,7 +3,7 @@ const Arweave = require('arweave/node');
 const parse = require('url-parse');
 const Hapi = require('@hapi/hapi');
 const puppeteer = require('puppeteer');
-const fetch = require("node-fetch");
+const Sentencer = require('sentencer');
 
 
 const argv = require('yargs')
@@ -51,28 +51,60 @@ const arweave = Arweave.init({
   protocol: argv.arweave.protocol.replace(':', '') || 'https'
 });
 
-const take_screenshot = async (browser, page, site, enconding='base64', fullpage=true, viewport={ width: 1920, height: 1080 }) => {
+
+const take_screenshot = async (page, enconding, fullpage, viewport) => {
   await page.setViewport(viewport);
-  let buffer = await page.screenshot({fullPage: fullpage, encoding: enconding});
-  return buffer;
+  return await page.screenshot({fullPage: fullpage, encoding: enconding});
 };
 
-const get_title = async (page) => {
+const get_title = async (page, site) => {
   try {
     const element = await page.$("title");
     return await page.evaluate(element => element.textContent, element);
   } catch (e) {
+
     console.log(e);
-    return 'Ups, i\'m down?'
+
+    Sentencer.configure({
+      nounList: ['site', 'page', 'land', 'world', 'dimension', 'planet'],
+      adjectiveList: ['defeated', 'deteriorated', 'ruined', 'losing status'],
+    });
+
+    return Sentencer.make(`Ups, this {{ nouns }} was {{ adjective }}, long live to ${site}!`)
   }
 };
 
-async function dispatchTX(tx) {
-  // Set transaction anchor
-  tx.last_tx = await arweave.api.get('/tx_anchor').then(x => x.data)
+const get_page = async (site, type='png', enconding='base64', fullpage=true,
+                        viewport={ width: 1920, height: 1080 }) => {
+  const browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
+  const page = await browser.newPage();
+  await page.goto(site);
+  const screenshot = await take_screenshot(page, enconding, fullpage, viewport);
+  const title = await get_title(page, site);
+  await browser.close();
+
+  const metadata = {
+    'Content-Type': 'image/'+type,
+    'page:title': title,
+    'User-Agent': 'Chrome/latest',
+    'page:timestamp': Date.now() / 1000 | 0,
+    'page:url': site
+  };
+
+  return {
+     screenshot, metadata
+  }
+};
+
+async function dispatchTX(image, tags) {
+  const tx = await arweave.createTransaction({data: image}, wallet);
+
+  Object.keys(tags).map((key) => {
+    tx.addTag(key, tags[key]);
+  });
 
   // Sign and dispatch the tx
-  await arweave.transactions.sign(tx, wallet)
+  await arweave.transactions.sign(tx, wallet);
   const response = await arweave.transactions.post(tx);
 
   let output = `Transaction ${tx.get('id')} dispatched with response: ${response.status}.`;
@@ -80,9 +112,25 @@ async function dispatchTX(tx) {
 
   return {
     response: response,
-    txID: tx.get('id'),
-    status: response.status
+    tx: tx
   };
+}
+
+const selfie_and_post = async (site_raw, config) => {
+  let { metadata, screenshot } = await get_page(site_raw);
+  let site = parse(site_raw);
+
+  const tags = {
+    host: site.host,
+    domain: site.host.split('.').slice(-2).join('.'),
+    path: site.path || '/',
+    type: 'binary',
+    createdBy: 'Selfie Web',
+    ...metadata
+  };
+  let {response, tx} = await dispatchTX(screenshot, tags);
+
+  return { metadata, screenshot, tags, tx, response, site };
 }
 
 const init = async () => {
@@ -94,8 +142,15 @@ const init = async () => {
   server.route({
     method: 'GET',
     path: '/',
-    handler: (request, h) => {
-      return 'Last sites photos';
+    handler: async (request, h) => {
+      const address = await arweave.wallets.jwkToAddress(wallet);
+      const balance = await arweave.wallets.getBalance(address);
+
+      return {
+        status: 'ok',
+        address: address,
+        balance: balance
+      };
     }
   });
 
@@ -104,46 +159,13 @@ const init = async () => {
     path: '/photo',
     handler: async (request, h) => {
       let site_raw = request.payload.site;
-      let site = parse(site_raw);
 
-      const browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
-      const page = await browser.newPage();
-      await page.goto(site_raw);
-      const screenshot = await take_screenshot(browser, page, site_raw, 'binary');
-      const title = await get_title(page);
-      await browser.close();
-
-      let address;
-      let balance;
-
-      address = await arweave.wallets.jwkToAddress(wallet);
-      balance = await arweave.wallets.getBalance(address);
       try {
-        let tx = await arweave.createTransaction({data: screenshot}, wallet);
-        const tags = {
-          host: site.host,
-          domain: site.host.split('.').slice(-2).join('.'),
-          path: site.path || '/',
-          type: 'binary',
-          createdBy: 'Selfie Web',
-          'Content-Type': 'image/png',
-          'User-Agent': 'Chrome/latest',
-          'page:url': site.origin,
-          'page:title': title,
-          'page:timestamp': Date.now() / 1000 | 0,
-        };
-
-        Object.keys(tags).map((key) => {
-          tx.addTag(key, tags[key]);
-        });
-
-        let {response, txID, status} = await dispatchTX(tx);
+        let {tx, response, site } = await selfie_and_post(site_raw, {});
         return {
           status: 'ok',
-          address: address,
-          balance: balance,
-          txID: txID,
-          txStatus: status,
+          txID: tx.get('id'),
+          txStatus: response.status,
           site: site
         }
       } catch (e) {
@@ -151,11 +173,9 @@ const init = async () => {
       }
       return {
         status: 'ok',
-        address: address,
-        balance: balance,
         txID: -1,
         txStatus: -1,
-        site: site
+        site: site_raw
       }
     }
   });
