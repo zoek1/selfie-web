@@ -4,6 +4,8 @@ const parse = require('url-parse');
 const Hapi = require('@hapi/hapi');
 const puppeteer = require('puppeteer');
 const Sentencer = require('sentencer');
+const mongo = require('mongodb').MongoClient;
+const CronJob = require('cron').CronJob;
 
 
 const argv = require('yargs')
@@ -51,8 +53,35 @@ const arweave = Arweave.init({
   protocol: argv.arweave.protocol.replace(':', '') || 'https'
 });
 
+const url = 'mongodb://localhost:27017'
 
-const take_screenshot = async (page, enconding, fullpage, viewport) => {
+let client;
+let db;
+
+const PERIODS = {
+  'daily': '* * */24 * * *',
+  'weekly': '* * * * * 0',
+  'monthly': '* * * 1 * *',
+  'test': '*/30 * * * * *',
+};
+let jobs = {};
+
+const start_jobs = async () => {
+  db.collection('sites').find({}).toArray((err, items) => {
+    items.forEach((item) => {
+      let period = PERIODS[item.period];
+      if (item.domain !== '' &&  period !== null && period !== undefined) {
+        jobs[item._id] = new CronJob(period, function(){
+          console.log(`scheduling ${item._id}!`);
+          task_selfie(item._id);
+        });
+        jobs[item._id].start();
+      }
+    })
+  });
+};
+
+  const take_screenshot = async (page, enconding, fullpage, viewport) => {
   await page.setViewport(viewport);
   return await page.screenshot({fullPage: fullpage, encoding: enconding});
 };
@@ -74,7 +103,7 @@ const get_title = async (page, site) => {
   }
 };
 
-const get_page = async (site, type='png', enconding='base64', fullpage=true,
+const get_page = async (site, type='png', enconding='binary', fullpage=true,
                         viewport={ width: 1920, height: 1080 }) => {
   const browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
   const page = await browser.newPage();
@@ -131,7 +160,36 @@ const selfie_and_post = async (site_raw, config) => {
   let {response, tx} = await dispatchTX(screenshot, tags);
 
   return { metadata, screenshot, tags, tx, response, site };
-}
+};
+
+const task_selfie = async (reference) => {
+  try {
+    let config = await db.collection('sites').findOne({_id: reference});
+    if (config === null) return;
+
+    console.log(`Iniciando tarea ${reference}`);
+    if (config.period === 'test')
+      return;
+
+    let {metadata, tags, tx, response, site} = await selfie_and_post(config.site, config);
+    let record = await db.collection('snapshots').insertOne({
+      id: tx.get('id'),
+      status: response.status,
+      metadata: metadata,
+      host: tags.host,
+      domain: tags.domain,
+      path: tags.path,
+      type: tags.type,
+      reference: reference
+    });
+  } catch (e) {
+    let record = await db.collection('snapshots').insertOne({
+      status: 'error',
+      reference: reference,
+      error: e.toString()
+    });
+  }
+};
 
 const init = async () => {
   const server = Hapi.server({
@@ -158,29 +216,46 @@ const init = async () => {
     method: 'POST',
     path: '/photo',
     handler: async (request, h) => {
+      const sites = db.collection('sites');
       let site_raw = request.payload.site;
+      let period = request.payload.period || 'daily';
+      let filters = request.payload.filters || 'no';
+      let type = request.payload.type || 'image';
+      let devices = request.payload.devices || ['desktop'];
 
+      let domain = parse(site_raw).host;
       try {
-        let {tx, response, site } = await selfie_and_post(site_raw, {});
-        return {
-          status: 'ok',
-          txID: tx.get('id'),
-          txStatus: response.status,
-          site: site
+        let site = await sites.findOne({domain});
+        if (site === null && domain !== '') {
+          console.log('Add domain task');
+          const config = {
+            domain: domain,
+            period: period,
+            filters: filters,
+            type: type,
+            devices: devices
+          };
+          const new_site = await sites.insertOne(config);
+          return {
+            referece: new_site.insertedId,
+            ...config
+          };
+        } else {
+          console.log('Domain exists:' + site)
+          return site;
         }
       } catch (e) {
-        console.log(e);
-      }
-      return {
-        status: 'ok',
-        txID: -1,
-        txStatus: -1,
-        site: site_raw
+        return {
+          error: e
+        }
       }
     }
   });
 
+  client = await mongo.connect(url, {useNewUrlParser: true});
+  db = client.db('selfie');
 
+  await start_jobs();
   await server.start();
   console.log('Server running on %s', server.info.uri);
 };
