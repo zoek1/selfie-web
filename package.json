@@ -23,6 +23,7 @@
   "dependencies": {
     "@hapi/hapi": "^18.4.0",
     "arweave": "^1.5.3",
+    "node-fetch": "^2.6.0",
     "puppeteer": "^2.0.0",
     "url-parse": "^1.4.7",
     "yargs": "^14.2.0"
