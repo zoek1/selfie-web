@@ -6,7 +6,9 @@ const puppeteer = require('puppeteer');
 const Sentencer = require('sentencer');
 const mongo = require('mongodb').MongoClient;
 const CronJob = require('cron').CronJob;
-
+const getPixels = require('get-pixels');
+const crypto = require("crypto");
+const GIFEncoder = require('gif-encoder');
 
 const argv = require('yargs')
   .usage('Usage: $0 <command> [options]')
@@ -58,6 +60,10 @@ const url = 'mongodb://localhost:27017'
 let client;
 let db;
 
+const DEVICES = {
+  desktop: {width: 1920, height: 1080}
+};
+
 const PERIODS = {
   'daily': '* * */24 * * *',
   'weekly': '* * * * * 0',
@@ -103,8 +109,7 @@ const get_title = async (page, site) => {
   }
 };
 
-const get_page = async (site, type='png', enconding='binary', fullpage=true,
-                        viewport={ width: 1920, height: 1080 }) => {
+const get_page = async (site, viewport, type='png', enconding='binary', fullpage=true) => {
   const browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
   const page = await browser.newPage();
   await page.goto(site);
@@ -145,21 +150,119 @@ async function dispatchTX(image, tags) {
   };
 }
 
+async function scrollPage(page) {
+  await page.evaluate(async () => {
+    window.scrollBy(0, 200);
+  });
+}
+
+const addtogif = async (encoder, filepath, images, done, counter = 0) => {
+  console.log(`${counter} ${images[counter]}`)
+  getPixels(images[counter], async function (err, pixels) {
+    encoder.addFrame(pixels.data);
+    encoder.read();
+    if (counter === images.length - 1) {
+      encoder.finish();
+      // let fs = require('fs').promises;
+      const data = fs.readFileSync(filepath, "binary");
+      await done(data);
+    } else {
+      addtogif(encoder, filepath, images, done, ++counter);
+    }
+  });
+};
+
+const cleanup = (listOfPNGs, workdir) => {
+  let i = listOfPNGs.length;
+  listOfPNGs.forEach(function (filepath) {
+    fs.unlinkSync(filepath);
+  });
+  fs.rmdirSync(workdir);
+};
+
+
 const selfie_and_post = async (site_raw, config) => {
-  let { metadata, screenshot } = await get_page(site_raw);
+  let metadata, screenshot;
   let site = parse(site_raw);
+  let devices = config['devices'];
 
-  const tags = {
-    host: site.host,
-    domain: site.host.split('.').slice(-2).join('.'),
-    path: site.path || '/',
-    type: 'binary',
-    createdBy: 'Selfie Web',
-    ...metadata
-  };
-  let {response, tx} = await dispatchTX(screenshot, tags);
+  let resolution = devices[0] !== undefined && Object.keys(DEVICES).indexOf(devices[0]) !== -1 ? DEVICES[devices[0]] : DEVICES['desktop'];
+  if (config.type === 'gif') {
+    const encoder = new GIFEncoder(resolution.width,  resolution.height);
+    const id = crypto.randomBytes(16).toString("hex");
+    const workDir = `./${id}/`;
+    const filepath = `${id}.gif`;
+    const file = fs.createWriteStream(filepath);
 
-  return { metadata, screenshot, tags, tx, response, site };
+    if (!fs.existsSync(workDir)) {
+      fs.mkdirSync(workDir);
+    }
+
+    encoder.setFrameRate(60);
+    encoder.pipe(file);
+    encoder.setQuality(40);
+    encoder.setDelay(500);
+    encoder.writeHeader();
+    encoder.setRepeat(0);
+
+    const browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
+    const page = await browser.newPage();
+    await page.goto(site_raw);
+    const title = await get_title(page, site_raw);
+
+    await page.setViewport(resolution);
+
+    for (let i = 0; i < 30; i++) {
+      await page.screenshot({ path: workDir + i + ".png" });
+      await scrollPage(page);
+    }
+
+    await browser.close();
+
+    let listOfPNGs = fs.readdirSync(workDir)
+      .map(a => a.substr(0, a.length - 4) + '')
+      .sort(function (a, b) { return a - b })
+      .map(a => workDir + a.substr(0, a.length) + '.png');
+
+    const  metadata = {
+      'Content-Type': 'image/'+config.type,
+      'page:title': title,
+      'User-Agent': 'Chrome/latest',
+      'page:timestamp': Date.now() / 1000 | 0,
+      'page:url': site_raw
+    };
+
+    addtogif(encoder, filepath, listOfPNGs, async (screenshot) => {
+      cleanup(listOfPNGs, workDir);
+
+      const tags = {
+        host: site.host,
+        domain: site.host.split('.').slice(-2).join('.'),
+        path: site.path || '/',
+        type: 'binary',
+        createdBy: 'Selfie Web',
+        ...metadata
+      };
+
+
+      let {response, tx} = await dispatchTX(screenshot, tags);
+      console.log(tx.get('id'))
+    });
+  } else {
+    let { metadata, screenshot } = await get_page(site_raw, resolution);
+    const tags = {
+      host: site.host,
+      domain: site.host.split('.').slice(-2).join('.'),
+      path: site.path || '/',
+      type: 'binary',
+      createdBy: 'Selfie Web',
+      ...metadata
+    };
+
+    return;
+    let {response, tx} = await dispatchTX(screenshot, tags);
+    return { metadata, screenshot, tags, tx, response, site };
+  }
 };
 
 const task_selfie = async (reference) => {
@@ -224,6 +327,7 @@ const init = async () => {
       let devices = request.payload.devices || ['desktop'];
 
       let domain = parse(site_raw).host;
+      selfie_and_post(site_raw, {type: 'gif', devices: devices})
       try {
         let site = await sites.findOne({domain});
         if (site === null && domain !== '') {
@@ -236,6 +340,15 @@ const init = async () => {
             devices: devices
           };
           const new_site = await sites.insertOne(config);
+          let p = PERIODS[period];
+          if (domain !== '' &&  p !== null && p !== undefined) {
+            let job = new CronJob(p, function(){
+              console.log(`scheduling ${new_site.insertedId}!`);
+              task_selfie(new_site.insertedId);
+            });
+            job.start();
+          }
+
           return {
             referece: new_site.insertedId,
             ...config

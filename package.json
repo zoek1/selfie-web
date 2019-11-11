@@ -24,6 +24,8 @@
     "@hapi/hapi": "^18.4.0",
     "arweave": "^1.5.3",
     "cron": "^1.7.2",
+    "get-pixels": "^3.3.2",
+    "gif-encoder": "^0.7.2",
     "mongodb": "^3.3.3",
     "node-cron": "^2.0.3",
     "node-fetch": "^2.6.0",
