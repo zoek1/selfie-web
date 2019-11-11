@@ -69,6 +69,7 @@ const PERIODS = {
   'weekly': '* * * * * 0',
   'monthly': '* * * 1 * *',
   'test': '*/30 * * * * *',
+  'hourly': '* * */1 * * *'
 };
 let jobs = {};
 
@@ -77,6 +78,7 @@ const start_jobs = async () => {
     items.forEach((item) => {
       let period = PERIODS[item.period];
       if (item.domain !== '' &&  period !== null && period !== undefined) {
+        console.log(`Start task for ${item.domain}, period: ${item.period} (${period})`);
         jobs[item._id] = new CronJob(period, function(){
           console.log(`scheduling ${item._id}!`);
           task_selfie(item._id);
@@ -152,7 +154,7 @@ async function dispatchTX(image, tags) {
 
 async function scrollPage(page) {
   await page.evaluate(async () => {
-    window.scrollBy(0, 200);
+    window.scrollBy(0, 300);
   });
 }
 
@@ -163,8 +165,7 @@ const addtogif = async (encoder, filepath, images, done, counter = 0) => {
     encoder.read();
     if (counter === images.length - 1) {
       encoder.finish();
-      // let fs = require('fs').promises;
-      const data = fs.readFileSync(filepath, "binary");
+      const data = fs.readFileSync(filepath);
       await done(data);
     } else {
       addtogif(encoder, filepath, images, done, ++counter);
@@ -181,8 +182,7 @@ const cleanup = (listOfPNGs, workdir) => {
 };
 
 
-const selfie_and_post = async (site_raw, config) => {
-  let metadata, screenshot;
+const selfie_and_post = async (site_raw, config, reference) => {
   let site = parse(site_raw);
   let devices = config['devices'];
 
@@ -247,6 +247,16 @@ const selfie_and_post = async (site_raw, config) => {
 
       let {response, tx} = await dispatchTX(screenshot, tags);
       console.log(tx.get('id'))
+      await db.collection('snapshots').insertOne({
+        id: tx.get('id'),
+        status: response.status,
+        metadata: metadata,
+        host: tags.host,
+        domain: tags.domain,
+        path: tags.path,
+        type: tags.type,
+        reference: reference
+      });
     });
   } else {
     let { metadata, screenshot } = await get_page(site_raw, resolution);
@@ -259,8 +269,18 @@ const selfie_and_post = async (site_raw, config) => {
       ...metadata
     };
 
-    return;
     let {response, tx} = await dispatchTX(screenshot, tags);
+    await db.collection('snapshots').insertOne({
+      id: tx.get('id'),
+      status: response.status,
+      metadata: metadata,
+      host: tags.host,
+      domain: tags.domain,
+      path: tags.path,
+      type: tags.type,
+      reference: reference
+    });
+
     return { metadata, screenshot, tags, tx, response, site };
   }
 };
@@ -274,17 +294,7 @@ const task_selfie = async (reference) => {
     if (config.period === 'test')
       return;
 
-    let {metadata, tags, tx, response, site} = await selfie_and_post(config.site, config);
-    let record = await db.collection('snapshots').insertOne({
-      id: tx.get('id'),
-      status: response.status,
-      metadata: metadata,
-      host: tags.host,
-      domain: tags.domain,
-      path: tags.path,
-      type: tags.type,
-      reference: reference
-    });
+    await selfie_and_post(config.site, config, reference);
   } catch (e) {
     let record = await db.collection('snapshots').insertOne({
       status: 'error',
@@ -327,7 +337,9 @@ const init = async () => {
       let devices = request.payload.devices || ['desktop'];
 
       let domain = parse(site_raw).host;
-      selfie_and_post(site_raw, {type: 'gif', devices: devices})
+
+      // selfie_and_post(site_raw, {type: 'gif', devices: devices})
+
       try {
         let site = await sites.findOne({domain});
         if (site === null && domain !== '') {
