@@ -61,15 +61,19 @@ let client;
 let db;
 
 const DEVICES = {
-  desktop: {width: 1920, height: 1080}
+  desktop: {width: 1920, height: 1080},
+  tablet: {width: 768, height: 1024},
+  mobile: {width: 320, height: 480}
 };
 
 const PERIODS = {
-  'daily': '* * */24 * * *',
-  'weekly': '* * * * * 0',
-  'monthly': '* * * 1 * *',
-  'test': '*/30 * * * * *',
-  'hourly': '* * */1 * * *'
+  'daily': '0 0 0 * * */1',
+  'quarter': '0 0 0 * */3 *',
+  'yearly': '0 0 0 * */12 *',
+  'weekly': '0 0 0 * * */6',
+  'monthly': '0 0 0 */30 * *',
+  // 'test': '*/30 * * * * *',
+  'hourly': '0 0 * * * *'
 };
 let jobs = {};
 
@@ -77,8 +81,8 @@ const start_jobs = async () => {
   db.collection('sites').find({}).toArray((err, items) => {
     items.forEach((item) => {
       let period = PERIODS[item.period];
-      if (item.domain !== '' &&  period !== null && period !== undefined) {
-        console.log(`Start task for ${item.domain}, period: ${item.period} (${period})`);
+      if (item.site !== '' &&  period !== null && period !== undefined) {
+        console.log(`Start task for ${item.site}, period: ${item.period} (${period})`);
         jobs[item._id] = new CronJob(period, function(){
           console.log(`scheduling ${item._id}!`);
           task_selfie(item._id);
@@ -183,6 +187,7 @@ const cleanup = (listOfPNGs, workdir) => {
 
 
 const selfie_and_post = async (site_raw, config, reference) => {
+  console.log(site_raw)
   let site = parse(site_raw);
   let devices = config['devices'];
 
@@ -190,8 +195,8 @@ const selfie_and_post = async (site_raw, config, reference) => {
   if (config.type === 'gif') {
     const encoder = new GIFEncoder(resolution.width,  resolution.height);
     const id = crypto.randomBytes(16).toString("hex");
-    const workDir = `./${id}/`;
-    const filepath = `${id}.gif`;
+    const workDir = `./tmp/${id}/`;
+    const filepath = `./tmp/${id}.gif`;
     const file = fs.createWriteStream(filepath);
 
     if (!fs.existsSync(workDir)) {
@@ -282,6 +287,7 @@ const selfie_and_post = async (site_raw, config, reference) => {
     });
 
     return { metadata, screenshot, tags, tx, response, site };
+    
   }
 };
 
@@ -289,13 +295,13 @@ const task_selfie = async (reference) => {
   try {
     let config = await db.collection('sites').findOne({_id: reference});
     if (config === null) return;
-
     console.log(`Iniciando tarea ${reference}`);
     if (config.period === 'test')
       return;
 
     await selfie_and_post(config.site, config, reference);
   } catch (e) {
+    console.log(e);
     let record = await db.collection('snapshots').insertOne({
       status: 'error',
       reference: reference,
@@ -332,16 +338,26 @@ const init = async () => {
       const sites = db.collection('sites');
       let site_raw = request.payload.site;
       let period = request.payload.period || 'daily';
-      let filters = request.payload.filters || 'no';
+      let filters = 'no';
       let type = request.payload.type || 'image';
-      let devices = request.payload.devices || ['desktop'];
+      let devices = request.payload.device ? [request.payload.device] : ['desktop'];
 
-      let domain = parse(site_raw).host;
+      let obj_site = parse(site_raw);
+      let domain = obj_site.host
+      let protocol = obj_site.protocol || 'http:'
+      let path = obj_site.pathname || '/'
+      let fullsite = `${protocol}//${domain}${path}`
 
       // selfie_and_post(site_raw, {type: 'gif', devices: devices})
-
+      console.log(obj_site)
+      if (domain === '' || domain === undefined) {
+        return {
+	  status: 'error',
+	  msg: 'Url format must be protocol://domain/path'
+	}
+      }
       try {
-        let site = await sites.findOne({domain});
+        let site = await sites.findOne({site: fullsite});
         if (site === null && domain !== '') {
           console.log('Add domain task');
           const config = {
@@ -349,7 +365,8 @@ const init = async () => {
             period: period,
             filters: filters,
             type: type,
-            devices: devices
+            devices: devices,
+	    site: fullsite 
           };
           const new_site = await sites.insertOne(config);
           let p = PERIODS[period];
@@ -370,7 +387,8 @@ const init = async () => {
           return site;
         }
       } catch (e) {
-        return {
+        console.log(e)
+	return {
           error: e
         }
       }
