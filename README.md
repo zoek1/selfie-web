@@ -42,12 +42,14 @@ Send to http://host/photo a payload to register sites:
   "device": 'desktop' // mobile, tablet
 }
 ```
+![](images/add_selfie.png)
 
 The bot will store this info to its database and make screendshots and some timelapses(GIF) periodically at the indicated it period !
 
 You can check all registered tasks at the root http://host/
+![](images/wallet_jobs.png)
 
-And see what transactions are sended correctly to http://host/
+And see what transactions are sended correctly to http://host/jobs
 
 In a future let's build some integrations to show your web art to the world!
 
