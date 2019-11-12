@@ -67,13 +67,13 @@ const DEVICES = {
 };
 
 const PERIODS = {
-  'daily': '0 0 0 * * */1',
-  'quarter': '0 0 0 * */3 *',
+  'daily': '0 15 0 * * */1',
+  'quarter': '0 20 0 * */3 *',
   'yearly': '0 0 0 * */12 *',
-  'weekly': '0 0 0 * * */6',
-  'monthly': '0 0 0 */30 * *',
+  'weekly': '0 30 0 * * */6',
+  'monthly': '0 45 0 */30 * *',
   // 'test': '*/30 * * * * *',
-  'hourly': '0 0 * * * *'
+  'hourly': '0 */55 * * * *'
 };
 let jobs = {};
 
@@ -320,16 +320,30 @@ const init = async () => {
     method: 'GET',
     path: '/',
     handler: async (request, h) => {
+	    try{
+     const sites = db.collection('sites');
       const address = await arweave.wallets.jwkToAddress(wallet);
       const balance = await arweave.wallets.getBalance(address);
-
+      const registered = await sites.find({}).toArray();
+		    console.log(registered)
       return {
         status: 'ok',
         address: address,
-        balance: balance
-      };
+        balance: balance,
+	scheduled: registered
+      };} catch(e){console.log(e)}
     }
   });
+
+   server.route({
+	method: 'GET',
+	path: '/jobs',
+        handler: async (request, h) => {
+          const jobs = await db.collection('snapshots').find({status: 200}).toArray();
+	  return {
+            jobs: jobs
+	  }
+    }});
 
   server.route({
     method: 'POST',
