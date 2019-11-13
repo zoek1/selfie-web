@@ -2,7 +2,7 @@
 
 Images, Gif and maybe more to build the next memory machine.
 
-Account is associated to the test bot: https://viewblock.io/arweave/address/Qq-wNSAIRjNpfQ2qLK6Deb34GsmsKM3orz0kLgYXUxY 
+See the log activity for the account associated to the test bot: [viewblock.com](https://viewblock.io/arweave/address/Qq-wNSAIRjNpfQ2qLK6Deb34GsmsKM3orz0kLgYXUxY) or [arscan.io](https://arscan.io/address/Qq-wNSAIRjNpfQ2qLK6Deb34GsmsKM3orz0kLgYXUxY)
 
 
 ## Motivation
