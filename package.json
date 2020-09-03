@@ -21,7 +21,7 @@
   },
   "homepage": "https://github.com/zoek1/selfie-web#readme",
   "dependencies": {
-    "@hapi/hapi": "^18.4.0",
+    "@hapi/hapi": "^19.1.1",
     "arweave": "^1.5.3",
     "cron": "^1.7.2",
     "get-pixels": "^3.3.2",
